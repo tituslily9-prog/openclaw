@@ -1,5 +1,6 @@
+// Tests user-facing pairing messages and setup command copy.
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { expectPairingReplyText } from "../../test/helpers/pairing-reply.js";
 import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
@@ -16,7 +17,7 @@ describe("buildPairingReply", () => {
     envSnapshot.restore();
   });
 
-  const cases = [
+  const pairingReplyCases = [
     {
       channel: "telegram",
       idLine: "Your Telegram user id: 42",
@@ -49,13 +50,23 @@ describe("buildPairingReply", () => {
     },
   ] as const;
 
-  it.each(cases)("formats pairing reply for $channel", (testCase) => {
-    const text = buildPairingReply(testCase);
-    expectPairingReplyText(text, testCase);
-    // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
+  function expectPairingApproveCommand(text: string, testCase: (typeof pairingReplyCases)[number]) {
     const commandRe = new RegExp(
       `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
     );
     expect(text).toMatch(commandRe);
+    expect(
+      text.match(new RegExp(`pairing approve ${testCase.channel} ${testCase.code}`, "g")),
+    ).toHaveLength(1);
+  }
+
+  function expectProfileAwarePairingReply(testCase: (typeof pairingReplyCases)[number]) {
+    const text = buildPairingReply(testCase);
+    expectPairingReplyText(text, testCase);
+    expectPairingApproveCommand(text, testCase);
+  }
+
+  it.each(pairingReplyCases)("formats pairing reply for $channel", (testCase) => {
+    expectProfileAwarePairingReply(testCase);
   });
 });

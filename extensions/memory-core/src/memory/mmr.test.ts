@@ -1,3 +1,4 @@
+// Memory Core tests cover mmr plugin behavior.
 import { describe, it, expect } from "vitest";
 import {
   tokenize,
@@ -29,6 +30,37 @@ describe("tokenize", () => {
         name: "dedupe repeated tokens",
         input: "hello hello world world",
         expected: ["hello", "world"],
+      },
+      {
+        name: "CJK characters produce unigrams and bigrams",
+        input: "今天讨论",
+        expected: ["今", "天", "讨", "论", "今天", "天讨", "讨论"],
+      },
+      {
+        name: "mixed ASCII and CJK",
+        input: "hello 你好世界 test",
+        expected: ["hello", "test", "你", "好", "世", "界", "你好", "好世", "世界"],
+      },
+      {
+        name: "single CJK character (no bigrams)",
+        input: "龙",
+        expected: ["龙"],
+      },
+      {
+        name: "non-adjacent CJK chars do not form bigrams",
+        input: "我a好",
+        expected: ["a", "我", "好"],
+        // No "我好" bigram — they are separated by "a"
+      },
+      {
+        name: "Japanese hiragana",
+        input: "こんにちは",
+        expected: ["こ", "ん", "に", "ち", "は", "こん", "んに", "にち", "ちは"],
+      },
+      {
+        name: "Korean hangul",
+        input: "안녕하세요",
+        expected: ["안", "녕", "하", "세", "요", "안녕", "녕하", "하세", "세요"],
       },
     ] as const;
 
@@ -90,11 +122,59 @@ describe("textSimilarity", () => {
       { name: "same words reordered", left: "hello world", right: "world hello", expected: 1 },
       { name: "different text", left: "hello world", right: "foo bar", expected: 0 },
       { name: "case insensitive", left: "Hello World", right: "hello world", expected: 1 },
+      {
+        name: "CJK similar texts share tokens",
+        left: "今天我们讨论了项目进展",
+        right: "今天我们讨论了会议安排",
+        // Shared unigrams: 今,天,我,们,讨,论,了 (7) + shared bigrams: 今天,天我,我们,们讨,讨论,论了 (6) = 13 shared
+        // Total unique tokens > 13, so similarity > 0 and < 1
+        expected: -1, // placeholder — just check > 0
+      },
+      {
+        name: "CJK completely different texts",
+        left: "苹果香蕉",
+        right: "钢铁煤炭",
+        expected: 0,
+      },
     ] as const;
 
     for (const testCase of cases) {
-      expect(textSimilarity(testCase.left, testCase.right), testCase.name).toBe(testCase.expected);
+      if (testCase.expected === -1) {
+        // Placeholder: just assert positive similarity
+        const sim = textSimilarity(testCase.left, testCase.right);
+        expect(sim, testCase.name).toBeGreaterThan(0);
+        expect(sim, testCase.name).toBeLessThan(1);
+      } else {
+        expect(textSimilarity(testCase.left, testCase.right), testCase.name).toBe(
+          testCase.expected,
+        );
+      }
     }
+  });
+
+  // Regression: dreaming dedupe (and any caller comparing arbitrary content
+  // strings via Jaccard tokens) must NOT merge distinct snippets when both
+  // sides tokenize to the empty set. The shared `tokenize` only emits ASCII
+  // word-tokens and CJK uni-/bigrams, so inputs in other scripts (Cyrillic,
+  // Arabic, emoji-only, punctuation-only) all tokenize to `{}` and would
+  // otherwise return Jaccard=1 → false dedupe.
+  it("falls back to literal equality when both inputs tokenize to empty sets (non-CJK/non-ASCII)", () => {
+    // Distinct Cyrillic snippets — must NOT merge.
+    expect(textSimilarity("Привет мир", "Доброе утро")).toBe(0);
+    // Distinct Arabic snippets — must NOT merge.
+    expect(textSimilarity("مرحبا بالعالم", "صباح الخير")).toBe(0);
+    // Emoji-only — distinct must NOT merge, identical must merge.
+    expect(textSimilarity("🦞🦞🦞", "🚀🚀🚀")).toBe(0);
+    expect(textSimilarity("🦞🦞🦞", "🦞🦞🦞")).toBe(1);
+    // Punctuation-only — distinct must NOT merge, identical must merge.
+    expect(textSimilarity("!!!", "???")).toBe(0);
+    expect(textSimilarity("!!!", "!!!")).toBe(1);
+    // Two identical Cyrillic snippets — same normalized string → merge.
+    expect(textSimilarity("Привет мир", "Привет мир")).toBe(1);
+    // Empty vs empty — preserve identity (both literally equal).
+    expect(textSimilarity("", "")).toBe(1);
+    // Normalized equality is case-insensitive for non-tokenized text.
+    expect(textSimilarity("Привет МИР", "привет мир")).toBe(1);
   });
 });
 
@@ -116,7 +196,7 @@ describe("computeMMRScore", () => {
         expected: -0.5,
       },
       { name: "lambda=0.5 mixed", relevance: 0.8, similarity: 0.6, lambda: 0.5, expected: 0.1 },
-      { name: "default lambda math", relevance: 1.0, similarity: 0.5, lambda: 0.7, expected: 0.55 },
+      { name: "default lambda math", relevance: 1, similarity: 0.5, lambda: 0.7, expected: 0.55 },
     ] as const;
 
     for (const testCase of cases) {
@@ -130,8 +210,8 @@ describe("computeMMRScore", () => {
 
 describe("empty input behavior", () => {
   it("returns empty array for empty input", () => {
-    expect(mmrRerank([])).toEqual([]);
-    expect(applyMMRToHybridResults([])).toEqual([]);
+    expect(mmrRerank([])).toStrictEqual([]);
+    expect(applyMMRToHybridResults([])).toStrictEqual([]);
   });
 });
 
@@ -160,7 +240,7 @@ describe("mmrRerank", () => {
 
   describe("lambda edge cases", () => {
     const diverseItems: MMRItem[] = [
-      { id: "1", score: 1.0, content: "apple banana cherry" },
+      { id: "1", score: 1, content: "apple banana cherry" },
       { id: "2", score: 0.9, content: "apple banana date" },
       { id: "3", score: 0.8, content: "elderberry fig grape" },
     ];
@@ -193,7 +273,7 @@ describe("mmrRerank", () => {
   describe("diversity behavior", () => {
     it("promotes diverse results over similar high-scoring ones", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "machine learning neural networks" },
+        { id: "1", score: 1, content: "machine learning neural networks" },
         { id: "2", score: 0.95, content: "machine learning deep learning" },
         { id: "3", score: 0.9, content: "database systems sql queries" },
         { id: "4", score: 0.85, content: "machine learning algorithms" },
@@ -209,7 +289,7 @@ describe("mmrRerank", () => {
 
     it("handles items with identical content", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "identical content" },
+        { id: "1", score: 1, content: "identical content" },
         { id: "2", score: 0.9, content: "identical content" },
         { id: "3", score: 0.8, content: "different stuff" },
       ];
@@ -222,7 +302,7 @@ describe("mmrRerank", () => {
 
     it("handles all identical content gracefully", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "same" },
+        { id: "1", score: 1, content: "same" },
         { id: "2", score: 0.9, content: "same" },
         { id: "3", score: 0.8, content: "same" },
       ];
@@ -236,7 +316,7 @@ describe("mmrRerank", () => {
   describe("tie-breaking", () => {
     it("uses original score as tiebreaker", () => {
       const items: MMRItem[] = [
-        { id: "1", score: 1.0, content: "unique content one" },
+        { id: "1", score: 1, content: "unique content one" },
         { id: "2", score: 0.9, content: "unique content two" },
         { id: "3", score: 0.8, content: "unique content three" },
       ];
@@ -273,7 +353,7 @@ describe("mmrRerank", () => {
     it("handles negative scores", () => {
       const items: MMRItem[] = [
         { id: "1", score: -0.5, content: "hello world" },
-        { id: "2", score: -1.0, content: "foo bar" },
+        { id: "2", score: -1, content: "foo bar" },
       ];
 
       const result = mmrRerank(items, { lambda: 0.7 });
@@ -341,7 +421,7 @@ describe("applyMMRToHybridResults", () => {
         path: "/a.ts",
         startLine: 1,
         endLine: 10,
-        score: 1.0,
+        score: 1,
         snippet: "function add numbers together",
         source: "memory",
       },

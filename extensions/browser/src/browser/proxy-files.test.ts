@@ -1,7 +1,8 @@
+// Browser tests cover proxy files plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MEDIA_MAX_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MEDIA_MAX_BYTES } from "../../../../src/media/store.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-support.js";
 import { persistBrowserProxyFiles } from "./proxy-files.js";
 
@@ -49,6 +50,6 @@ describe("persistBrowserProxyFiles", () => {
 
     await expect(
       fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
-    ).rejects.toThrow();
+    ).rejects.toHaveProperty("code", "ENOENT");
   });
 });

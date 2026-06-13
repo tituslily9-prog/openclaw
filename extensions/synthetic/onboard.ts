@@ -1,3 +1,4 @@
+// Synthetic setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -7,7 +8,7 @@ import {
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
   SYNTHETIC_MODEL_CATALOG,
-} from "./api.js";
+} from "./models.js";
 
 export { SYNTHETIC_DEFAULT_MODEL_REF };
 

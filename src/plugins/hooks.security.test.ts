@@ -1,47 +1,14 @@
+// Verifies plugin hook security constraints and rejections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook } from "./hooks.test-helpers.js";
+import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type {
-  PluginHookBeforeToolCallResult,
-  PluginHookMessageSendingResult,
-  PluginHookRegistration,
-} from "./types.js";
-
-function addBeforeToolCallHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookBeforeToolCallResult | Promise<PluginHookBeforeToolCallResult>,
-  priority?: number,
-) {
-  addTestHook({
-    registry,
-    pluginId,
-    hookName: "before_tool_call",
-    handler: handler as PluginHookRegistration["handler"],
-    priority,
-  });
-}
-
-function addMessageSendingHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookMessageSendingResult | Promise<PluginHookMessageSendingResult>,
-  priority?: number,
-) {
-  addTestHook({
-    registry,
-    pluginId,
-    hookName: "message_sending",
-    handler: handler as PluginHookRegistration["handler"],
-    priority,
-  });
-}
+import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
-const messageCtx = { channelId: "telegram" };
+const messageCtx = { channelId: "forum" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
@@ -53,9 +20,10 @@ async function runBeforeToolCallWithHooks(
   }>,
   catchErrors = true,
 ) {
-  for (const { pluginId, result, priority, handler } of hooks) {
-    addBeforeToolCallHook(registry, pluginId, handler ?? (() => result), priority);
-  }
+  addStaticTestHooks(registry, {
+    hookName: "before_tool_call",
+    hooks,
+  });
   const runner = createHookRunner(registry, { catchErrors });
   return await runner.runBeforeToolCall(toolEvent, toolCtx);
 }
@@ -70,11 +38,41 @@ async function runMessageSendingWithHooks(
   }>,
   catchErrors = true,
 ) {
-  for (const { pluginId, result, priority, handler } of hooks) {
-    addMessageSendingHook(registry, pluginId, handler ?? (() => result), priority);
-  }
+  addStaticTestHooks(registry, {
+    hookName: "message_sending",
+    hooks,
+  });
   const runner = createHookRunner(registry, { catchErrors });
   return await runner.runMessageSending(messageEvent, messageCtx);
+}
+
+function expectTerminalHookState<
+  TResult extends { block?: boolean; blockReason?: string; cancel?: boolean; content?: string },
+>(result: TResult | undefined, expected: Partial<TResult>) {
+  if ("block" in expected) {
+    expect(result?.block).toBe(expected.block);
+  }
+  if ("blockReason" in expected) {
+    expect(result?.blockReason).toBe(expected.blockReason);
+  }
+  if ("cancel" in expected) {
+    expect(result?.cancel).toBe(expected.cancel);
+  }
+  if ("content" in expected) {
+    expect(result?.content).toBe(expected.content);
+  }
+}
+
+function requireLoggerErrorMessage(logger: { error: { mock: { calls: unknown[][] } } }): string {
+  const call = logger.error.mock.calls[0];
+  if (!call) {
+    throw new Error("expected logger error call");
+  }
+  expect(typeof call[0]).toBe("string");
+  if (typeof call[0] !== "string") {
+    throw new Error("expected logger error message to be a string");
+  }
+  return call[0];
 }
 
 describe("before_tool_call terminal block semantics", () => {
@@ -117,11 +115,7 @@ describe("before_tool_call terminal block semantics", () => {
     },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
-    if (expected.block === undefined) {
-      expect(result?.block).toBeUndefined();
-      return;
-    }
-    expect(result).toEqual(expect.objectContaining(expected));
+    expectTerminalHookState(result, expected);
   });
 
   it("short-circuits lower-priority hooks after block=true", async () => {
@@ -166,7 +160,7 @@ describe("before_tool_call terminal block semantics", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority before-tool-call hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });
@@ -181,6 +175,61 @@ describe("before_tool_call terminal block semantics", () => {
 
     expect(result?.block).toBe(true);
     expect(low).not.toHaveBeenCalled();
+  });
+
+  it("throws for before_tool_call when configured as fail-closed", async () => {
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: {},
+          priority: 100,
+          handler: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, {
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_tool_call: "fail-closed",
+      },
+    });
+
+    await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
+      "before_tool_call handler from failing failed: boom",
+    );
+  });
+
+  it("sanitizes caught hook error logs", async () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    addStaticTestHooks(registry, {
+      hookName: "message_received",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: undefined,
+          handler: () => {
+            throw new Error("boom\nforged\tsecret sk-test1234567890");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, { catchErrors: true, logger });
+
+    await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
+
+    const message = requireLoggerErrorMessage(logger);
+    expect(message).toMatch(
+      /^\[hooks\] message_received handler from failing failed: boom forged secret/,
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("sk-test1234567890");
   });
 });
 
@@ -223,11 +272,7 @@ describe("message_sending terminal cancel semantics", () => {
     },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runMessageSendingWithHooks(registry, hooks);
-    if (expected.cancel === undefined) {
-      expect(result?.cancel).toBeUndefined();
-      return;
-    }
-    expect(result).toEqual(expect.objectContaining(expected));
+    expectTerminalHookState(result, expected);
   });
 
   it("short-circuits lower-priority hooks after cancel=true", async () => {
@@ -263,7 +308,7 @@ describe("message_sending terminal cancel semantics", () => {
     expect(result?.content).toBe("second");
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority message-sending hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });

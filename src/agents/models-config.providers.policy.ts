@@ -1,26 +1,20 @@
-import { resolveBedrockConfigApiKey } from "../plugin-sdk/amazon-bedrock.js";
-import { resolveAnthropicVertexConfigApiKey } from "../plugin-sdk/anthropic-vertex.js";
+/**
+ * Applies provider plugin policy to configured model provider settings.
+ */
 import {
-  normalizeGoogleProviderConfig,
-  shouldNormalizeGoogleProviderConfig,
-} from "../plugin-sdk/google.js";
-import { applyModelStudioNativeStreamingUsageCompat } from "../plugin-sdk/modelstudio.js";
-import { applyMoonshotNativeStreamingUsageCompat } from "../plugin-sdk/moonshot.js";
+  applyProviderNativeStreamingUsagePolicy,
+  normalizeProviderConfigPolicy,
+  resolveProviderConfigApiKeyPolicy,
+} from "./models-config.providers.policy.runtime.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
-const NATIVE_STREAMING_USAGE_COMPAT: Record<string, (provider: ProviderConfig) => ProviderConfig> =
-  {
-    moonshot: applyMoonshotNativeStreamingUsageCompat,
-    modelstudio: applyModelStudioNativeStreamingUsageCompat,
-  };
-
-const PROVIDER_CONFIG_API_KEY_RESOLVERS: Partial<
-  Record<string, (env: NodeJS.ProcessEnv) => string | undefined>
-> = {
-  "amazon-bedrock": resolveBedrockConfigApiKey,
-  "anthropic-vertex": resolveAnthropicVertexConfigApiKey,
-};
-
+/**
+ * Provider-specific config policy adapters.
+ *
+ * Runtime policy rules live in the sibling runtime module; this file exposes the
+ * small stable API used by models-config loading and tests.
+ */
+/** Applies native-streaming usage compatibility policy to the provider map. */
 export function applyNativeStreamingUsageCompat(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
@@ -28,7 +22,7 @@ export function applyNativeStreamingUsageCompat(
   const nextProviders: Record<string, ProviderConfig> = {};
 
   for (const [providerKey, provider] of Object.entries(providers)) {
-    const nextProvider = NATIVE_STREAMING_USAGE_COMPAT[providerKey]?.(provider) ?? provider;
+    const nextProvider = applyProviderNativeStreamingUsagePolicy(providerKey, provider);
     nextProviders[providerKey] = nextProvider;
     changed ||= nextProvider !== provider;
   }
@@ -36,18 +30,22 @@ export function applyNativeStreamingUsageCompat(
   return changed ? nextProviders : providers;
 }
 
+/** Normalizes a provider config according to provider-specific runtime policy. */
 export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
-  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
-    return normalizeGoogleProviderConfig(providerKey, provider);
+  const normalized = normalizeProviderConfigPolicy(providerKey, provider);
+  if (normalized && normalized !== provider) {
+    return normalized;
   }
   return provider;
 }
 
+/** Resolves a provider-specific API key env lookup policy when one exists. */
 export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
+  provider?: ProviderConfig,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  return PROVIDER_CONFIG_API_KEY_RESOLVERS[providerKey];
+  return resolveProviderConfigApiKeyPolicy(providerKey, provider);
 }

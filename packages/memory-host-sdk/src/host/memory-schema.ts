@@ -1,11 +1,17 @@
+// Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "./error-utils.js";
 
+// SQLite schema setup for builtin memory index, embedding cache, and FTS.
+
+/** Ensure memory index tables and optional FTS/cache tables exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
   embeddingCacheTable: string;
   cacheEnabled: boolean;
   ftsTable: string;
   ftsEnabled: boolean;
+  ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
@@ -58,6 +64,8 @@ export function ensureMemoryIndexSchema(params: {
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
+      const tokenizer = params.ftsTokenizer ?? "unicode61";
+      const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
       params.db.exec(
         `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
           `  text,\n` +
@@ -67,11 +75,11 @@ export function ensureMemoryIndexSchema(params: {
           `  model UNINDEXED,\n` +
           `  start_line UNINDEXED,\n` +
           `  end_line UNINDEXED\n` +
-          `);`,
+          `${tokenizeClause});`,
       );
       ftsAvailable = true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       ftsAvailable = false;
       ftsError = message;
     }
@@ -85,6 +93,7 @@ export function ensureMemoryIndexSchema(params: {
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
 }
 
+/** Add a missing shipped column without rebuilding existing memory tables. */
 function ensureColumn(
   db: DatabaseSync,
   table: "files" | "chunks",

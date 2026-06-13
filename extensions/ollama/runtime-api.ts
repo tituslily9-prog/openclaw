@@ -1,3 +1,4 @@
+// Ollama API module exposes the plugin public contract.
 export {
   buildAssistantMessage,
   buildOllamaChatRequest,
@@ -14,3 +15,9 @@ export {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "./src/stream.js";
+export {
+  createOllamaEmbeddingProvider,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  type OllamaEmbeddingClient,
+  type OllamaEmbeddingProvider,
+} from "./src/embedding-provider.js";

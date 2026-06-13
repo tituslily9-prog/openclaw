@@ -1,3 +1,6 @@
+// Memory Core plugin module implements mmr behavior.
+import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+
 /**
  * Maximal Marginal Relevance (MMR) re-ranking algorithm.
  *
@@ -25,47 +28,10 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   lambda: 0.7,
 };
 
-/**
- * Tokenize text for Jaccard similarity computation.
- * Extracts alphanumeric tokens and normalizes to lowercase.
- */
-export function tokenize(text: string): Set<string> {
-  const tokens = text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
-  return new Set(tokens);
-}
-
-/**
- * Compute Jaccard similarity between two token sets.
- * Returns a value in [0, 1] where 1 means identical sets.
- */
-export function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-  if (setA.size === 0 && setB.size === 0) {
-    return 1;
-  }
-  if (setA.size === 0 || setB.size === 0) {
-    return 0;
-  }
-
-  let intersectionSize = 0;
-  const smaller = setA.size <= setB.size ? setA : setB;
-  const larger = setA.size <= setB.size ? setB : setA;
-
-  for (const token of smaller) {
-    if (larger.has(token)) {
-      intersectionSize++;
-    }
-  }
-
-  const unionSize = setA.size + setB.size - intersectionSize;
-  return unionSize === 0 ? 0 : intersectionSize / unionSize;
-}
-
-/**
- * Compute text similarity between two content strings using Jaccard on tokens.
- */
-export function textSimilarity(contentA: string, contentB: string): number {
-  return jaccardSimilarity(tokenize(contentA), tokenize(contentB));
-}
+// Re-export the shared CJK-aware tokenizer + Jaccard helpers so existing
+// `import { tokenize, jaccardSimilarity, textSimilarity } from "./mmr.js"`
+// callers (including `mmr.test.ts`) continue to work without churn.
+export { jaccardSimilarity, textSimilarity, tokenize };
 
 /**
  * Compute the maximum similarity between an item and all selected items.
